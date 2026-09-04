@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "GROQ_API_KEY": "gsk_put-your-free-groq-key-here",
+    "COSMOS_ENDPOINT": "",
+    "COSMOS_KEY": "",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": ""
+  },
+  "Host": {
+    "CORS": "*"
+  }
+}

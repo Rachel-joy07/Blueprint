@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: #0B1E33;
+  color: #EAF2F8;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(94, 200, 242, 0.3);
+}
+
+/* Visible, deliberate focus ring for keyboard nav — not the browser default,
+   but never suppressed. */
+:focus-visible {
+  outline: 2px solid #5EC8F2;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.blueprint-canvas {
+  position: relative;
+  background-color: #0B1E33;
+  background-image:
+    linear-gradient(#152D48 1px, transparent 1px),
+    linear-gradient(90deg, #152D48 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+/* A faint radial vignette anchored top-left, like light falling across a
+   drafting table — one deliberate atmospheric touch, not decoration piled on. */
+.blueprint-canvas::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 900px 500px at 12% -10%, rgba(94,200,242,0.07), transparent 60%);
+}
+
+.shimmer-bg {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.03) 0%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.03) 100%
+  );
+  background-size: 200% 100%;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #24507A;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2E6293;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.react-flow__edge-path {
+  transition: stroke 0.2s ease;
+}

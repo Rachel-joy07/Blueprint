@@ -1,0 +1,4 @@
+azure-functions
+python-hcl2==4.3.4
+requests
+azure-cosmos

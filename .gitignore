@@ -1,0 +1,17 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/local.settings.json
+
+# Azure Functions / SWA CLI local artifacts
+backend/.python_packages/
+.swa/
+
+# Misc
+.DS_Store
+*.log
