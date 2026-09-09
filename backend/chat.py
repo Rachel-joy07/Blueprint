@@ -139,12 +139,14 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 
 def llm_chat(message: str, history: list[dict], scan_context: dict | None):
     """Real LLM turn via Groq's free API (OpenAI-compatible format).
-    Returns reply text, or None if unavailable/failed - callers should
-    fall back to the deterministic matcher when this returns None, so
-    the assistant degrades gracefully rather than breaking outright."""
+    Returns (reply_text, None) on success, or (None, error_reason) on
+    failure - callers fall back to the deterministic matcher either way,
+    but keeping the real reason lets /api/chat surface it directly in the
+    response, which is far easier to debug on a deployed backend than
+    digging through logs."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None
+        return None, "GROQ_API_KEY is not set in this environment"
 
     try:
         system = build_system_prompt(scan_context)
@@ -172,124 +174,37 @@ def llm_chat(message: str, history: list[dict], scan_context: dict | None):
         )
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception:
+        return data["choices"][0]["message"]["content"].strip(), None
+    except Exception as e:
         logging.exception("LLM chat call failed")
-        return None
+        return None, f"{type(e).__name__}: {e}"
 
 
 def get_chat_reply(message: str, history: list[dict], scan_context: dict | None):
     """
-    Returns (recommendation | None, reply_text).
+    Returns (recommendation | None, reply_text, debug_reason | None).
 
     recommendation is attached whenever the message matches a known
     pattern in RECOMMENDATIONS - this drives the rich SuggestionCard in
     the UI (snippet + est. cost) alongside the LLM's free-form reply. The
     LLM stays the primary source of the conversational text; the card is
     a bonus, not a replacement.
+
+    debug_reason is the real exception (or "key not set"), included so
+    /api/chat can surface it directly for troubleshooting a deployed
+    backend without needing log access.
     """
     rec = match_recommendation(message)
 
-    reply = llm_chat(message, history, scan_context)
+    reply, error = llm_chat(message, history, scan_context)
     if reply is not None:
-        return rec, reply
+        return rec, reply, None
 
     # No API key configured, or the call failed - deterministic fallback.
     if rec:
-        return rec, f'(offline fallback - set GROQ_API_KEY for free-form Q&A) Here\'s a fit for "{message}":'
+        return rec, f'(offline fallback - set GROQ_API_KEY for free-form Q&A) Here\'s a fit for "{message}":', error
     return None, (
-        "I can't reach the chat model right now (is GROQ_API_KEY set?), and this message "
+        "I can't reach the chat model right now, and this message "
         "didn't match a known pattern. Try something like \"cheap database\", \"small VM\", or "
         "\"secure storage\"."
-    )
-
-
-# --- Manager / Engineer narrative -------------------------------------
-#
-# A different job for the same Groq call: instead of answering a
-# question, summarize the whole scan as a short paragraph pitched at a
-# specific audience. Reuses build_system_prompt() so the model sees the
-# same grounded scan data the chat assistant does.
-
-NARRATIVE_INSTRUCTIONS = {
-    "manager": (
-        "Write a short (3-5 sentence) plain-English summary of this infrastructure scan for a "
-        "non-technical manager or stakeholder. No jargon, no Terraform syntax, no resource type "
-        "names. Focus on business risk (what could go wrong, described in plain terms - e.g. "
-        "'anyone on the internet could read customer data') and dollar cost impact. End with the "
-        "single most urgent thing to fix, in plain terms."
-    ),
-    "engineer": (
-        "Write a short (3-5 sentence) technical summary of this infrastructure scan for an "
-        "engineer. Reference specific resource names, the exact misconfiguration, and the fix. "
-        "Prioritize by severity (security risks before cost waste) and note the total potential "
-        "monthly savings."
-    ),
-}
-
-
-def get_narrative(scan_context: dict, audience: str = "manager") -> str | None:
-    """Real LLM call. Returns None if no API key or the call fails -
-    callers should fall back to build_fallback_narrative()."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key or not scan_context:
-        return None
-
-    try:
-        instructions = NARRATIVE_INSTRUCTIONS.get(audience, NARRATIVE_INSTRUCTIONS["manager"])
-        system = instructions + "\n\n" + build_system_prompt(scan_context)
-
-        response = requests.post(
-            GROQ_API_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": "Summarize this scan."},
-                ],
-                "max_tokens": 250,
-                "temperature": 0.4,
-            },
-            timeout=45,
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception:
-        logging.exception("Narrative generation failed")
-        return None
-
-
-def build_fallback_narrative(scan_context: dict, audience: str = "manager") -> str:
-    """Deterministic template used when GROQ_API_KEY isn't set or the
-    call fails - keeps this feature demoable with zero external
-    dependency, same philosophy as the rest of the tool."""
-    summary = scan_context.get("summary", {})
-    risk = summary.get("riskCount", 0)
-    waste = summary.get("wasteCount", 0)
-    savings = (summary.get("monthlyCostActual", 0) or 0) - (summary.get("monthlyCostOptimized", 0) or 0)
-    flagged = [n for n in scan_context.get("nodes", []) if n.get("issue")]
-    top_risk = next((n for n in flagged if n["issue"]["severity"] == "risk"), None)
-
-    if audience == "manager":
-        text = f"This scan found {risk} security issue(s) and {waste} cost-inefficiency issue(s). "
-        if savings > 0:
-            text += f"Fixing the cost issues could save roughly ${savings:.0f}/month. "
-        if top_risk:
-            text += f"Most urgent: \"{top_risk['issue']['title']}\" on {top_risk['label']} - this should be addressed first."
-        else:
-            text += "No urgent security issues were found."
-        return text
-
-    if not flagged:
-        return "No issues found - every resource passed both the security and cost rule sets."
-    lines = [f"- {n['label']} ({n['type']}): {n['issue']['title']}" for n in flagged]
-    return "Findings, by resource:\n" + "\n".join(lines)
-
-
-def get_narrative_reply(scan_context: dict, audience: str = "manager"):
-    """Returns (text, is_live_llm_response: bool)."""
-    text = get_narrative(scan_context, audience)
-    if text is not None:
-        return text, True
-    return build_fallback_narrative(scan_context, audience), False
+    ), error

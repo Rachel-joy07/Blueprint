@@ -20,10 +20,8 @@ import logging
 from parser import parse_terraform, infer_edges, find_resource_blocks, locate_line, snippet_around
 from rules.security_rules import run_security_rules
 from rules.cost_rules import run_cost_rules
-from chat import get_chat_reply, get_narrative_reply
+from chat import get_chat_reply
 from auth import get_client_principal
-from compliance import get_compliance_tags
-from autofix import get_patch
 import db
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -91,10 +89,6 @@ def scan(req: func.HttpRequest) -> func.HttpResponse:
                     issue.pop("match_hint", None)
                     issue["line"] = 1
                     issue["code"] = ""
-
-                # Compliance framework tags (SOC 2 / PCI-DSS / HIPAA / CIS /
-                # Well-Architected) - looked up by the rule's stable rule_id.
-                issue["compliance"] = get_compliance_tags(issue.get("rule_id"))
 
             pos = positions[r["id"]]
             nodes.append({
@@ -181,7 +175,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         history = body.get("history", [])
         scan_context = body.get("scan")
 
-        recommendation, reply = get_chat_reply(message, history, scan_context)
+        recommendation, reply, debug_reason = get_chat_reply(message, history, scan_context)
 
         logging.info(
             "chat message hasScanContext=%s matchedRecommendation=%s",
@@ -189,6 +183,12 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         )
 
         result = {"reply": reply, "recommendation": recommendation}
+        if debug_reason:
+            # Surfaces the real failure reason (missing key vs. an actual
+            # exception from the Groq call) directly in the API response -
+            # much easier to debug on a deployed backend than digging
+            # through logs. Harmless to leave in; it's your own error.
+            result["debug"] = debug_reason
         return func.HttpResponse(json.dumps(result), mimetype="application/json")
 
     except Exception as e:
@@ -254,110 +254,3 @@ def stats(req: func.HttpRequest) -> func.HttpResponse:
     scoped to the caller. Powers the small stats strip on the upload
     screen so the app has some visible sign of life beyond one session."""
     return func.HttpResponse(json.dumps(db.get_stats()), mimetype="application/json")
-
-
-@app.route(route="autofix", methods=["POST"])
-def autofix(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Body: { "source": "<full .tf file text>", "targets": [{"id": "azurerm_storage_account.data", "ruleId": "public_blob_access"}, ...] }
-
-    Re-locates each target's resource block in the source (same
-    brace-matching approach as the scan route), runs the matching patch
-    function from autofix.py, and splices the result back into the file.
-    Edits are applied bottom-to-top so earlier line numbers stay valid
-    while later ones are still being edited.
-
-    Returns the full fixed file text AND a per-resource before/after pair
-    in "changes" - the frontend renders that as individual diff cards
-    rather than one large file diff, which is easier to follow and to
-    demo one finding at a time.
-    """
-    try:
-        body = req.get_json()
-        source = body.get("source", "")
-        targets = body.get("targets", [])
-        if not source or not targets:
-            return func.HttpResponse(
-                json.dumps({"error": "source and targets are required"}),
-                status_code=400, mimetype="application/json"
-            )
-
-        blocks = find_resource_blocks(source)
-        lines = source.splitlines()
-
-        changes, applied, skipped = [], [], []
-        edits = []  # (start_line, end_line, new_text_or_empty)
-
-        for t in targets:
-            block = blocks.get(t.get("id"))
-            patch_fn = get_patch(t.get("ruleId"))
-            if not block or not patch_fn:
-                skipped.append(t.get("id"))
-                continue
-
-            original_text = "\n".join(block["lines"])
-            new_text = patch_fn(original_text, t)
-            if new_text is None:
-                skipped.append(t.get("id"))
-                continue
-
-            edits.append((block["start_line"], block["end_line"], new_text))
-            changes.append({
-                "id": t.get("id"),
-                "original": original_text,
-                # empty string from a patch function means "delete this
-                # resource" - represent that to the frontend as fixed: None
-                "fixed": new_text if new_text != "" else None,
-            })
-            applied.append(t.get("id"))
-
-        for start, end, new_text in sorted(edits, key=lambda e: e[0], reverse=True):
-            replacement = new_text.splitlines() if new_text else []
-            lines[start - 1:end] = replacement
-
-        result = {
-            "fixedSource": "\n".join(lines),
-            "applied": applied,
-            "skipped": skipped,
-            "changes": changes,
-        }
-        return func.HttpResponse(json.dumps(result), mimetype="application/json")
-
-    except Exception as e:
-        logging.exception("Autofix failed")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}), status_code=500, mimetype="application/json"
-        )
-
-
-@app.route(route="narrative", methods=["POST"])
-def narrative(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Body: { "scan": {fileName, summary, nodes, edges}, "audience": "manager" | "engineer" }
-
-    Powers the Manager/Engineer view toggle - one short paragraph
-    summarizing the scan, pitched at whichever audience is selected.
-    Falls back to a deterministic template (see chat.build_fallback_narrative)
-    if GROQ_API_KEY isn't set, so the toggle still works with zero
-    external dependency configured.
-    """
-    try:
-        body = req.get_json()
-        scan_context = body.get("scan")
-        audience = body.get("audience", "manager")
-        if not scan_context:
-            return func.HttpResponse(
-                json.dumps({"error": "scan is required"}), status_code=400,
-                mimetype="application/json"
-            )
-
-        text, is_live = get_narrative_reply(scan_context, audience)
-        return func.HttpResponse(
-            json.dumps({"narrative": text, "live": is_live}), mimetype="application/json"
-        )
-
-    except Exception as e:
-        logging.exception("Narrative generation failed")
-        return func.HttpResponse(
-            json.dumps({"error": str(e)}), status_code=500, mimetype="application/json"
-        )
