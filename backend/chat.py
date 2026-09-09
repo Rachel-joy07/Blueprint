@@ -175,7 +175,6 @@ def llm_chat(message: str, history: list[dict], scan_context: dict | None):
                 "model": GEMINI_MODEL,
                 "messages": api_messages,
                 "max_tokens": 600,
-                "temperature": 0.4,
             },
             timeout=45,
         )
