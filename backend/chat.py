@@ -181,6 +181,13 @@ def llm_chat(message: str, history: list[dict], scan_context: dict | None):
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"].strip(), None
+    except requests.HTTPError as e:
+        # Surface Google's actual rejection reason (response body), not just
+        # the generic "400 Client Error" text - that's the only way to tell
+        # exactly which part of the payload it didn't like.
+        body = e.response.text[:500] if e.response is not None else ""
+        logging.exception("LLM chat call failed")
+        return None, f"{type(e).__name__}: {e} | body: {body}"
     except Exception as e:
         logging.exception("LLM chat call failed")
         return None, f"{type(e).__name__}: {e}"
