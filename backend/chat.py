@@ -134,7 +134,7 @@ def build_system_prompt(scan_context: dict | None) -> str:
 
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 
 def llm_chat(message: str, history: list[dict], scan_context: dict | None):
