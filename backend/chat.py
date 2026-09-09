@@ -1,7 +1,7 @@
 """
 Powers POST /api/chat - the "Ask Blueprint" assistant.
 
-This is a real LLM-backed chatbot (via Groq's free API), not a keyword
+This is a real LLM-backed chatbot (via Google's free Gemini API), not a keyword
 rule engine. It's given:
   1. A system prompt describing what Blueprint is and a small knowledge
      base of known-good Azure config patterns (RECOMMENDATIONS below), so
@@ -13,8 +13,8 @@ rule engine. It's given:
   3. The running conversation history, so it's a real back-and-forth, not
      one-shot Q&A.
 
-Requires GROQ_API_KEY to be set (see README "Environment variables") -
-get a free one at console.groq.com, no credit card needed. Without it,
+Requires GEMINI_API_KEY to be set (see README "Environment variables") -
+get a free one at aistudio.google.com/apikey, no credit card needed. Without it,
 this falls back to a small deterministic keyword matcher against
 RECOMMENDATIONS - useful for offline dev, but that's a fallback mode
 now, not the primary path. Say so plainly in the reply rather than
@@ -133,20 +133,27 @@ def build_system_prompt(scan_context: dict | None) -> str:
     return prompt
 
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "openai/gpt-oss-120b"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def llm_chat(message: str, history: list[dict], scan_context: dict | None):
-    """Real LLM turn via Groq's free API (OpenAI-compatible format).
-    Returns (reply_text, None) on success, or (None, error_reason) on
-    failure - callers fall back to the deterministic matcher either way,
-    but keeping the real reason lets /api/chat surface it directly in the
-    response, which is far easier to debug on a deployed backend than
-    digging through logs."""
-    api_key = os.environ.get("GROQ_API_KEY")
+    """Real LLM turn via Google's free Gemini API (OpenAI-compatible
+    format). Returns (reply_text, None) on success, or (None, error_reason)
+    on failure - callers fall back to the deterministic matcher either
+    way, but keeping the real reason lets /api/chat surface it directly
+    in the response, which is far easier to debug on a deployed backend
+    than digging through logs.
+
+    Note: we tried Groq here first, but Groq's API sits behind Cloudflare,
+    which blocks requests from Azure's datacenter IP ranges as suspected
+    bot traffic (a known, unresolved issue on Groq's own community forum
+    for exactly this Azure-deployment scenario) - it works from a laptop
+    but 403s once deployed. Gemini is Google's own infrastructure and
+    doesn't have this problem."""
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return None, "GROQ_API_KEY is not set in this environment"
+        return None, "GEMINI_API_KEY is not set in this environment"
 
     try:
         system = build_system_prompt(scan_context)
@@ -162,19 +169,10 @@ def llm_chat(message: str, history: list[dict], scan_context: dict | None):
         api_messages.append({"role": "user", "content": message})
 
         response = requests.post(
-            GROQ_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                # Some Cloudflare-fronted APIs (Groq included) block the
-                # default python-requests user-agent as bot-like traffic,
-                # especially from cloud-datacenter IPs (e.g. Azure). A
-                # normal-looking one avoids that without changing anything
-                # about the actual request.
-                "User-Agent": "Mozilla/5.0 (compatible; BlueprintApp/1.0)",
-            },
+            GEMINI_API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": GROQ_MODEL,
+                "model": GEMINI_MODEL,
                 "messages": api_messages,
                 "max_tokens": 600,
                 "temperature": 0.4,
@@ -211,7 +209,7 @@ def get_chat_reply(message: str, history: list[dict], scan_context: dict | None)
 
     # No API key configured, or the call failed - deterministic fallback.
     if rec:
-        return rec, f'(offline fallback - set GROQ_API_KEY for free-form Q&A) Here\'s a fit for "{message}":', error
+        return rec, f'(offline fallback - set GEMINI_API_KEY for free-form Q&A) Here\'s a fit for "{message}":', error
     return None, (
         "I can't reach the chat model right now, and this message "
         "didn't match a known pattern. Try something like \"cheap database\", \"small VM\", or "
