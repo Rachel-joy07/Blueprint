@@ -163,7 +163,16 @@ def llm_chat(message: str, history: list[dict], scan_context: dict | None):
 
         response = requests.post(
             GROQ_API_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                # Some Cloudflare-fronted APIs (Groq included) block the
+                # default python-requests user-agent as bot-like traffic,
+                # especially from cloud-datacenter IPs (e.g. Azure). A
+                # normal-looking one avoids that without changing anything
+                # about the actual request.
+                "User-Agent": "Mozilla/5.0 (compatible; BlueprintApp/1.0)",
+            },
             json={
                 "model": GROQ_MODEL,
                 "messages": api_messages,
